@@ -789,3 +789,8 @@ void Render3DModelTestScene()
 	// R_DrawModel(state->testboxModel, 0xFF8888);
 	// R_DrawModel(state->cryoModel, 0xFF8888);
 }
+
+void RenderWorld()
+{
+	
+}

@@ -128,14 +128,47 @@ model_t ConvertToModel(gltf_model_t* gltf)
 model_t LoadGltfModel(char* path)
 {
 	file_data_t* file = Sys_LoadFile(&__state->assetArena, path);
+	if (!file) {
+		print_err("GLTF file not found: %s", path);
+		return (model_t){0};
+	}
 	gltf_model_t gltf = gltf_load(file->data);
 	model_t model = ConvertToModel(&gltf);
 	return model;
 }
 
+typedef struct {
+	char name[32];
+	model_t model;
+} asset_t;
+
+// TODO: Maybe make a macro for making static arrays with counts and include add/remove functions
+asset_t assets[64];
+int assetCount = 0;
+
+void LoadAssets()
+{
+	// sys_list_files("assets", FALSE, stat_t *output, int length)
+	sys_listing_t list = sys_listing("assets");
+	while (sys_next(&list)) {
+		if (strfind(list.file.filename, ".glb")) {
+			print("asset file: %s \n", list.file.filename);
+			if (assetCount < array_size(assets)) {
+				asset_t* asset = assets + assetCount++;
+				strbcopy(asset->name, list.file.filename, sizeof(asset->name));
+				asset->model = LoadGltfModel(strformat("assets/%s", list.file.filename));
+			} else {
+				sys_print_err("No more asset slots available");
+			}
+		}
+	}
+}
+
 void Init(state_t* state)
 {
 	state->assetArena = virtual_heap_allocator(MB(100), MB(1));
+
+	LoadAssets();
 
 	file_data_t* gltf = Sys_LoadFile(&__state->assetArena, "assets/cryopod_base.glb");
 	gltf_model_t cryoGltf = gltf_load(gltf->data);
