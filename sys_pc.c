@@ -3,7 +3,6 @@
 //  Copyright 2023 GiantJelly. All rights reserved.
 //
 
-#include <GL/gl.h>
 #define CORE_IMPL
 #include <core/core.h>
 #include <core/sys.h>
@@ -51,8 +50,12 @@ texture_t R_LoadTexture(char* path)
 	bmp_load_rgba32(file->data, result.texels);
 
 	for (int idx=0; idx<result.width*result.height; ++idx) {
-		vec4_t c = Color32ToFloat(result.texels[idx]);
-		result.texels[idx] = Color32(c.b, c.g, c.r, c.a);
+		// vec4_t c = Color32ToFloat(result.texels[idx]);
+		// result.texels[idx] = Color32(c.b, c.g, c.r, c.a);
+		colorrgba_t tmp;
+		tmp.color = result.texels[idx];
+		swap(tmp.r, tmp.b);
+		result.texels[idx] = tmp.color;
 	}
 
 	free_memory(&state->assetArena, file);
@@ -125,6 +128,79 @@ model_t ConvertToModel(gltf_model_t* gltf)
 	return model;
 }
 
+model_t GenerateModelFromQuads(mvertex_t* vertices, int quadCount, char* textureFile)
+{
+	// assert(count % 4 == 0);
+	state_t* state = GetState();
+	mesh_t* mesh = alloc_memory(&state->assetArena, sizeof(mesh_t)*1);
+
+	// gltf_mesh_t* gmesh = gltf->meshes + i;
+	int vertexCount = quadCount * 6;
+	mesh->vertexCount = vertexCount;
+	mesh->vertices = alloc_memory(&state->assetArena, sizeof(mvertex_t)*vertexCount);
+	int oi = 0;
+	for (int vi=0; vi<quadCount*4; vi+=4) {
+		vec3_t u = sub3(vertices[vi+1].pos, vertices[vi].pos);
+		vec3_t v = sub3(vertices[vi+2].pos, vertices[vi].pos);
+		vec3_t normal = normalize3(cross3(u, v));
+
+		mesh->vertices[oi+0] = (mvertex_t){
+			.pos = vertices[vi+0].pos,
+			.color = vertices[vi+0].color,
+			.texcoord = vertices[vi+0].texcoord,
+			.normal = normal,
+		};
+		mesh->vertices[oi+1] = (mvertex_t){
+			.pos = vertices[vi+1].pos,
+			.color = vertices[vi+1].color,
+			.texcoord = vertices[vi+1].texcoord,
+			.normal = normal,
+		};
+		mesh->vertices[oi+2] = (mvertex_t){
+			.pos = vertices[vi+2].pos,
+			.color = vertices[vi+2].color,
+			.texcoord = vertices[vi+2].texcoord,
+			.normal = normal,
+		};
+
+		u = sub3(vertices[vi+3].pos, vertices[vi+2].pos);
+		v = sub3(vertices[vi+0].pos, vertices[vi+2].pos);
+		normal = normalize3(cross3(u, v));
+
+		mesh->vertices[oi+3] = (mvertex_t){
+			.pos = vertices[vi+2].pos,
+			.color = vertices[vi+2].color,
+			.texcoord = vertices[vi+2].texcoord,
+			.normal = normal,
+		};
+		mesh->vertices[oi+4] = (mvertex_t){
+			.pos = vertices[vi+3].pos,
+			.color = vertices[vi+3].color,
+			.texcoord = vertices[vi+3].texcoord,
+			.normal = normal,
+		};
+		mesh->vertices[oi+5] = (mvertex_t){
+			.pos = vertices[vi+0].pos,
+			.color = vertices[vi+0].color,
+			.texcoord = vertices[vi+0].texcoord,
+			.normal = normal,
+		};
+
+		oi += 6;
+	}
+
+	if (strsize(textureFile)) {
+		mesh->texture = R_LoadTexture(textureFile);
+	}
+
+	model_t model = {
+		.meshCount = 1,
+		.meshes = mesh,
+	};
+
+	return model;
+}
+
 model_t LoadGltfModel(char* path)
 {
 	file_data_t* file = Sys_LoadFile(&__state->assetArena, path);
@@ -176,6 +252,13 @@ void Init(state_t* state)
 	state->cryoModel = ConvertToModel(&cryoGltf);
 	state->cubeModel = LoadGltfModel("assets/cube.glb");
 	state->testboxModel = LoadGltfModel("assets/testbox.glb");
+	state->corridorDefaultModel = LoadGltfModel("assets/corridor_default.glb");
+
+	texture_t levelBitmap = R_LoadTexture("assets/level.bmp");
+	assert(levelBitmap.width == LEVEL_GRID_SIZE && levelBitmap.height == LEVEL_GRID_SIZE);
+	for (int i=0; i<(levelBitmap.width*levelBitmap.height); ++i) {
+		state->game.level[i] = (levelBitmap.texels[i] == 0xFF0000FF);
+	}
 
 	state->window = vid_init_window("Linux Window", 320*4, 240*4, 0);
 
@@ -204,11 +287,15 @@ void Update(state_t* state)
 		exit(0);
 	}
 
-	
-	Render3DModelTestScene();
+	state->sysTime = time_get_ms();
+	state->deltaTime = clamp((state->sysTime - state->sysTimePrev) / 1000.0f, 0, 0.5f);
+	state->sysTimePrev = state->sysTime;
+	state->gameTime += state->deltaTime * 1.0f;
+
+	RenderWorld();
 	
 	// for (int idx=0; idx<320*240; ++idx) {
-	// 	framebuffer[idx] = depthbuffer[idx] * 100.0f;
+	// 	framebuffer[idx] = depthbuffer[idx] * 10.0f;
 	// }
 
 	// glXMakeCurrent(vid->sysDisplay, vid->sysWindow, vid->sysGLContext);

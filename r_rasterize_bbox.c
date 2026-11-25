@@ -26,6 +26,10 @@ void R_RasterizeBBoxTriangle(vertex_t v0, vertex_t v1, vertex_t v2, color_t colo
 	v1.pos.xyz = div3(v1.pos.xyz, vec3f(v1.pos.w));
 	v2.pos.xyz = div3(v2.pos.xyz, vec3f(v2.pos.w));
 
+	// R_RasterizePoint(vec3(v0.pos.x, v0.pos.y, 0), 0xFFFFFF);
+	// R_RasterizePoint(vec3(v1.pos.x, v1.pos.y, 0), 0xFFFFFF);
+	// R_RasterizePoint(vec3(v2.pos.x, v2.pos.y, 0), 0xFFFFFF);
+
 	// Calc reciprocals of UV, Color and W for perspective correction
 	v0.texcoord = div2(v0.texcoord, vec2f(v0.pos.w));
 	v1.texcoord = div2(v1.texcoord, vec2f(v1.pos.w));

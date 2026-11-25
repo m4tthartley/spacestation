@@ -50,7 +50,7 @@ float _ClipPlaneDist(vec4_t pos, plane_t plane)
 	return pos.x*plane.x + pos.y*plane.y + pos.z*plane.z + pos.w;
 }
 
-polygon_t R_ClipWithPlane(polygon_t polygon, plane_t plane)
+polygon_t R_ClipPolygonWithPlane(polygon_t polygon, plane_t plane)
 {
 	// int previ = clip->count-1;
 	// for (int vi=0; vi<clip->count; ++vi) {
@@ -108,3 +108,39 @@ polygon_t R_ClipWithPlane(polygon_t polygon, plane_t plane)
 	return clipped;
 }
 
+bool_t R_ClipLineWithPlane(vec4_t* v0, vec4_t* v1, plane_t plane)
+{
+	float d0 = _ClipPlaneDist(*v0, plane);
+	float d1 = _ClipPlaneDist(*v1, plane);
+
+	bool inclip0 = d0 >= 0;
+	bool inclip1 = d1 >= 0;
+
+	if (!inclip0 && !inclip1) {
+		return FALSE;
+	}
+
+	if (!inclip0) {
+		float t = d0 / (d0 - d1);
+		*v0 = lerp4(*v0, *v1, t);
+	}
+
+	if (!inclip1) {
+		float t = d0 / (d0 - d1);
+		*v1 = lerp4(*v0, *v1, t);
+	}
+
+	return TRUE;
+}
+
+bool_t R_ClipLine(vec4_t* v0, vec4_t* v1)
+{
+	bool_t r0 = R_ClipLineWithPlane(v0, v1, PLANE_X0);
+	bool_t r1 = R_ClipLineWithPlane(v0, v1, PLANE_X1);
+	bool_t r2 = R_ClipLineWithPlane(v0, v1, PLANE_Y0);
+	bool_t r3 = R_ClipLineWithPlane(v0, v1, PLANE_Y1);
+	bool_t r4 = R_ClipLineWithPlane(v0, v1, PLANE_Z0);
+	bool_t r5 = R_ClipLineWithPlane(v0, v1, PLANE_Z1);
+
+	return r0 && r1 && r2 && r3 && r4 && r5;
+}

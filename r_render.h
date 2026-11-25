@@ -10,6 +10,17 @@
 
 
 typedef uint32_t color_t;
+typedef struct {
+	union {
+		color_t color;
+		struct {
+			uint8_t r;
+			uint8_t g;
+			uint8_t b;
+			uint8_t a;
+		};
+	};
+} colorrgba_t;
 
 typedef struct {
 	int16_t x, y;
@@ -64,6 +75,22 @@ typedef struct {
 	float zOffset;
 } perspective_factors_t;
 
+typedef struct {
+	vec3_t pos;
+	vec3_t rotation;
+	// NOTE: maybe FOV?
+} camera_t;
+
+typedef enum {
+	R_PRIMITIVE_TRIANGLE,
+	R_PRIMITIVE_LINE,
+	R_PRIMITIVE_POINT,
+} r_primitive_type_t;
+typedef struct {
+	r_primitive_type_t type;
+	
+} r_primitive_t;
+
 
 extern inline vertex_t MVertexToVertex(mvertex_t v)
 {
@@ -87,7 +114,7 @@ vec3_t BarycentricCoords(vec2_t coord, vec2_t v0, vec2_t v1, vec2_t v2);
 vertex_t LerpTriVetices(vec2_t coord, vertex_t v0, vertex_t v1, vertex_t v2);
 vec4_t ClipSpaceToFramebufferSpace(vec4_t v);
 
-void R_RasterizePoint(vec4_t pos, color_t color);
+void R_RasterizePoint(vec3_t pos, color_t color);
 void R_RasterizeLine(vec4_t v0, vec4_t v1, color_t color);
 
 

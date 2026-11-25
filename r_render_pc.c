@@ -24,6 +24,7 @@ texture_t* __rActiveTexture = NULL;
 projection_type_t __rProjectionType = R_PROJECTION_NULL;
 perspective_factors_t __rPerspectiveFactors = {0};
 bool_t __rScanlineRasterization = FALSE;
+camera_t __rCamera = {0};
 
 
 color_t Color32(float r, float g, float b, float a)
@@ -63,6 +64,36 @@ uint32_t MixColor32(color_t a, color_t b)
 	vec4_t bf = Color32ToFloat(b);
 	vec4_t c = mul4(af, bf);
 	return Color32(c.r, c.g, c.b, c.a);
+}
+
+vec3_t R_RotateVector3(vec3_t v, vec3_t rotation)
+{
+	float xCos = cosf(rotation.x);
+	float xSin = sinf(rotation.x);
+	v = (vec3_t){
+		v.x,
+		xCos*v.y + xSin*v.z,
+		xCos*v.z - xSin*v.y,
+	};
+
+	float yCos = cosf(rotation.y);
+	float ySin = sinf(rotation.y);
+	v = (vec3_t){
+		yCos*v.x + ySin*v.z,
+		v.y,
+		yCos*v.z - ySin*v.x,
+	};
+
+	// NOTE: Just Z rotation right now
+	float zCos = cosf(rotation.z);
+	float zSin = sinf(rotation.z);
+	v = (vec3_t){
+		zCos*v.x + zSin*v.y,
+		zCos*v.y - zSin*v.x,
+		v.z,
+	};
+
+	return v;
 }
 
 void R_SetTranslation(vec3_t translation)
@@ -107,7 +138,13 @@ void R_PerspectiveProjection(float fov, float aspect, float near, float far)
 	};
 }
 
-vertex_t R_PerspectiveTransform(mvertex_t in)
+void R_SetCamera(vec3_t pos, vec3_t rotation)
+{
+	__rCamera.pos = pos;
+	__rCamera.rotation = rotation;
+}
+
+vertex_t R_PerspectiveTransform__(mvertex_t in)
 {
 	vertex_t out;
 	out.texcoord = in.texcoord;
@@ -116,10 +153,104 @@ vertex_t R_PerspectiveTransform(mvertex_t in)
 
 	perspective_factors_t p = __rPerspectiveFactors;
 
+	// out.pos.x = in.pos.x * p.xFactor;
+	// out.pos.y = in.pos.y * p.yFactor;
+	// out.pos.z = in.pos.z * p.zFactor + p.zOffset;
+	// out.pos.w = -in.pos.z;
 	out.pos.x = in.pos.x * p.xFactor;
-	out.pos.y = in.pos.y * p.yFactor;
-	out.pos.z = in.pos.z * p.zFactor + p.zOffset;
-	out.pos.w = -in.pos.z;
+	out.pos.y = in.pos.z * p.yFactor;
+	out.pos.z = -in.pos.y * p.zFactor + p.zOffset;
+	out.pos.w = +in.pos.y;
+
+	return out;
+}
+
+vec4_t R_PerspectiveTransform(vec3_t in)
+{
+	vec4_t out;
+
+	perspective_factors_t p = __rPerspectiveFactors;
+
+	// out.pos.x = in.pos.x * p.xFactor;
+	// out.pos.y = in.pos.y * p.yFactor;
+	// out.pos.z = in.pos.z * p.zFactor + p.zOffset;
+	// out.pos.w = -in.pos.z;
+	out.x = in.x * p.xFactor;
+	out.y = in.z * p.yFactor;
+	out.z = -in.y * p.zFactor + p.zOffset;
+	out.w = +in.y;
+
+	return out;
+}
+
+vec3_t R_ApplyTransforms(vec3_t in)
+{
+	// World Transform
+	in = R_RotateVector3(in, __rRotation);
+	in = mul3(in, __rScale);
+	in = add3(in, __rTranslation);
+
+	// Camera Transform
+	vec3_t cameraTranslation = neg3(__rCamera.pos);
+	vec3_t cameraRotation = neg3(__rCamera.rotation);
+	in = add3(in, cameraTranslation);
+	in = R_RotateVector3(in, cameraRotation);
+
+	return in;
+}
+
+vec3_t R_ApplyRotations(vec3_t in)
+{
+	// World Transform
+	in = R_RotateVector3(in, __rRotation);
+
+	// Camera Transform
+	vec3_t cameraRotation = neg3(__rCamera.rotation);
+	in = R_RotateVector3(in, cameraRotation);
+
+	return in;
+}
+
+vec4_t R_ApplyProjection(vec3_t in)
+{
+	vec4_t out;
+
+	switch (__rProjectionType) {
+		case R_PERSPECTIVE:
+			out = R_PerspectiveTransform(in);
+			break;
+		default:
+			out.xyz = in;
+			out.w = 1;
+			break;
+	}
+
+	return out;
+}
+
+vertex_t R_TransformAndProject(mvertex_t in) // NOTE: This doesn't rotate normals
+{
+	// World Transform
+	in.pos = R_RotateVector3(in.pos, __rRotation);
+	in.pos = mul3(in.pos, __rScale);
+	in.pos = add3(in.pos, __rTranslation);
+
+	// Camera Transform
+	vec3_t cameraTranslation = neg3(__rCamera.pos);
+	vec3_t cameraRotation = neg3(__rCamera.rotation);
+	in.pos = add3(in.pos, cameraTranslation);
+	in.pos = R_RotateVector3(in.pos, cameraRotation);
+
+	vertex_t out;
+
+	switch (__rProjectionType) {
+		case R_PERSPECTIVE:
+			out = R_PerspectiveTransform__(in);
+			break;
+		default:
+			out = MVertexToVertex(in);
+			break;
+	}
 
 	return out;
 }
@@ -132,36 +263,6 @@ void R_Clear()
 	for (int idx=0; idx<320*240; ++idx) {
 		depthbuffer[idx] = 100.0f;
 	}
-}
-
-vec3_t R_RotateVector3(vec3_t v, vec3_t rotation)
-{
-	float xCos = cosf(rotation.x);
-	float xSin = sinf(rotation.x);
-	v = (vec3_t){
-		v.x,
-		xCos*v.y + xSin*v.z,
-		xCos*v.z - xSin*v.y,
-	};
-
-	float yCos = cosf(rotation.y);
-	float ySin = sinf(rotation.y);
-	v = (vec3_t){
-		yCos*v.x + ySin*v.z,
-		v.y,
-		yCos*v.z - ySin*v.x,
-	};
-
-	// NOTE: Just Z rotation right now
-	float zCos = cosf(rotation.z);
-	float zSin = sinf(rotation.z);
-	v = (vec3_t){
-		zCos*v.x + zSin*v.y,
-		zCos*v.y - zSin*v.x,
-		v.z,
-	};
-
-	return v;
 }
 
 float TriangleArea(vec2_t v0, vec2_t v1, vec2_t v2)
@@ -286,14 +387,26 @@ void R_BlitPixel(int x, int y, color_t color)
 	}
 }
 
+void R_BlitPixelWithDepth(int x, int y, color_t color, float depth)
+{
+	vidrect_t res = {0, 0, 320, 240};
+	if (x >= 0 && x < res.w && y >= 0 && y < res.h) {
+		if (depthbuffer[y*res.w + x] < depth) {
+			return;
+		}
+		framebuffer[y*res.w + x] = color;
+		depthbuffer[y*res.w + x] = depth;
+	}
+}
+
 /*
 	The Rasterize functions take NDCs
 */
-void R_RasterizePoint(vec4_t pos, color_t color)
+void R_RasterizePoint(vec3_t pos, color_t color)
 {
 	vidrect_t res = {0, 0, 320, 240};
 
-	vec4_t coords = ClipSpaceToFramebufferSpace(pos);
+	vec4_t coords = ClipSpaceToFramebufferSpace(vec4f3(pos, 1));
 	int x = coords.x;
 	int y = coords.y;
 
@@ -306,12 +419,8 @@ void R_RasterizeLine(vec4_t v0, vec4_t v1, color_t color)
 {
 	vidrect_t res = {0, 0, 320, 240};
 
-	// Divide by W
-	v0.xyz = div3(v0.xyz, vec3f(v0.w));
-	v1.xyz = div3(v1.xyz, vec3f(v1.w));
-
-	vec4_t vec0 = ClipSpaceToFramebufferSpace(v0);
-	vec4_t vec1 = ClipSpaceToFramebufferSpace(v1);
+	v0 = ClipSpaceToFramebufferSpace(v0);
+	v1 = ClipSpaceToFramebufferSpace(v1);
 	// int x0 = coords0.x;
 	// int y0 = coords0.y;
 	// int x1 = coords1.x;
@@ -321,36 +430,84 @@ void R_RasterizeLine(vec4_t v0, vec4_t v1, color_t color)
 		// R_DrawLine(v0.x, v0.y, v1.x, v1.y, color);
 	// }
 
-	float v0x = vec0.x;
-	float v0y = vec0.y;
-	float v1x = vec1.x;
-	float v1y = vec1.y;
+	// float v0x = v0.x;
+	// float v0y = v0.y;
+	// float v0w = v0.w;
+	// float v1x = v1.x;
+	// float v1y = v1.y;
+	// float v1w = v1.w;
 
-	v0x += __rTranslation.x;
-	v0y += __rTranslation.y;
-	v1x += __rTranslation.x;
-	v1y += __rTranslation.y;
+	// v0x += __rTranslation.x;
+	// v0y += __rTranslation.y;
+	// v1x += __rTranslation.x;
+	// v1y += __rTranslation.y;
 
-	float v0xy[] = {v0x, v0y};
-	float v1xy[] = {v1x, v1y};
-	float diffx = v1xy[0] - v0xy[0];
-	float diffy = v1xy[1] - v0xy[1];
-	bool steep = fabs(diffy) > fabs(diffx);
-	int i0 = steep;
-	int i1 = !i0;
-	if (v0xy[i0] > v1xy[i0]) {
-		SWAP(v0xy[0], v1xy[0]);
-		SWAP(v0xy[1], v1xy[1]);
-	}
+	// float v0xy[] = {v0x, v0y};
+	// float v1xy[] = {v1x, v1y};
+	// float diffx = v1xy[0] - v0xy[0];
+	// float diffy = v1xy[1] - v0xy[1];
+	// bool steep = fabs(diffy) > fabs(diffx);
+	// int i0 = steep;
+	// int i1 = !i0;
+	// if (v0xy[i0] > v1xy[i0]) {
+	// 	SWAP(v0xy[0], v1xy[0]);
+	// 	SWAP(v0xy[1], v1xy[1]);
+	// }
 
-	float len = (v1xy[i0]-v0xy[i0]);
-	float ratio = (v1xy[i1]-v0xy[i1]) / len;
+	// float len = (v1xy[i0]-v0xy[i0]);
+	// float ratio = (v1xy[i1]-v0xy[i1]) / len;
 
-	for (int i=0; i<len; ++i) {
-		int32_t p[2];
-		p[i1] = v0xy[i1] + ratio*i;
-		p[i0] = v0xy[i0] + i;
-		R_BlitPixel(p[0], p[1], color);
+	// for (int i=0; i<len; ++i) {
+	// 	int32_t p[2];
+	// 	p[i1] = v0xy[i1] + ratio*i;
+	// 	p[i0] = v0xy[i0] + i;
+	// 	R_BlitPixel(p[0], p[1], color);
+	// }
+
+	v0.w = 1.0f / v0.w;
+	v1.w = 1.0f / v1.w;
+
+	float dx = v1.x - v0.x;
+	float dy = v1.y - v0.y;
+	float dw = v1.w - v0.w;
+	bool_t steep = fabs(dy) > fabs(dx);
+
+	if (steep) {
+		// Step in Y
+		if (v0.y > v1.y) {
+			SWAP(v0, v1);
+		}
+
+		float len = v1.y - v0.y;
+		float xstep = (v1.x-v0.x) / len;
+		float wstep = (v1.w-v0.w) / len;
+
+		for (int i=0; i<len; ++i) {
+			float py = v0.y + i;
+			float px = v0.x + xstep*i;
+			float w = v0.w + wstep*i;
+			w = 1.0f / w;
+
+			R_BlitPixelWithDepth(px, py, color, w);
+		}
+	} else {
+		// Step in X
+		if (v0.x > v1.x) {
+			SWAP(v0, v1);
+		}
+
+		float len = v1.x - v0.x;
+		float xstep = (v1.y-v0.y) / len;
+		float wstep = (v1.w-v0.w) / len;
+
+		for (int i=0; i<len; ++i) {
+			float px = v0.x + i;
+			float py = v0.y + xstep*i;
+			float w = v0.w + wstep*i;
+			w = 1.0f / w;
+
+			R_BlitPixelWithDepth(px, py, color, w);
+		}
 	}
 }
 
@@ -375,33 +532,69 @@ void R_RasterizeLine(vec4_t v0, vec4_t v1, color_t color)
 // 	}
 // }
 
-vertex_t R_TransformAndProject(mvertex_t in)
-{
-	in.pos = R_RotateVector3(in.pos, __rRotation);
-	in.pos = mul3(in.pos, __rScale);
-	in.pos = add3(in.pos, __rTranslation);
-
-	vertex_t out;
-
-	switch (__rProjectionType) {
-		case R_PERSPECTIVE:
-			out = R_PerspectiveTransform(in);
-			break;
-		default:
-			out = MVertexToVertex(in);
-			break;
-	}
-
-	return out;
-}
-
 vec3_t R_LightVertex(mvertex_t v)
 {
-	float ambient = 0.1f;
+	float ambient = 0.4f;
 	vec3_t sunDir = normalize3(vec3(1, 1, 1));
 	float sunLight = max(dot3(v.normal, sunDir), 0.0f);
 	float light = ambient + sunLight;
 	return vec3f(min(light, 1.0f));
+}
+
+void R_DrawPoint(vec3_t in, color_t color)
+{
+	vec4_t v = R_ApplyProjection(R_ApplyTransforms(in));
+
+	// Divide by W
+	v.xyz = div3(v.xyz, vec3f(v.w));
+
+	R_RasterizePoint(v.xyz, color);
+}
+
+void R_DrawLine(vec3_t in0, vec3_t in1, color_t color)
+{
+	// mvertex_t mv0 = {
+	// 	.pos = in0,
+	// };
+	// mvertex_t mv1 = {
+	// 	.pos = in1,
+	// };
+	// vertex_t v0 = R_TransformAndProject(mv0);
+	// vertex_t v1 = R_TransformAndProject(mv1);
+
+	vec4_t v0 = R_ApplyProjection(R_ApplyTransforms(in0));
+	vec4_t v1 = R_ApplyProjection(R_ApplyTransforms(in1));
+
+	// polygon_t poly = {.vertices={v0, v1}, .count=2};
+	// poly = R_ClipWithPlane(poly, PLANE_X0);
+	// poly = R_ClipWithPlane(poly, PLANE_X1);
+	// poly = R_ClipWithPlane(poly, PLANE_Y0);
+	// poly = R_ClipWithPlane(poly, PLANE_Y1);
+	// poly = R_ClipWithPlane(poly, PLANE_Z0);
+	// poly = R_ClipWithPlane(poly, PLANE_Z1);
+
+	// for (int vi=0; vi<(poly.count-2); ++vi) {
+	// 	vertex_t t0 = poly.vertices[0];
+	// 	vertex_t t1 = poly.vertices[vi+1];
+	// 	vertex_t t2 = poly.vertices[vi+2];
+
+	// 	// R_RasterizeTriangle(t0, t1, t2, color);
+	// 	R_RasterizeLine(t0.pos, t1.pos, color);
+	// 	R_RasterizeLine(t1.pos, t2.pos, color);
+	// 	R_RasterizeLine(t0.pos, t2.pos, color);
+	// }
+
+	if (!R_ClipLine(&v0, &v1)) {
+		return;
+	}
+
+	// Divide by W
+	v0.xyz = div3(v0.xyz, vec3f(v0.w));
+	v1.xyz = div3(v1.xyz, vec3f(v1.w));
+
+	// vertex_t t0 = poly.vertices[0];
+	// vertex_t t1 = poly.vertices[1];
+	R_RasterizeLine(v0, v1, color);
 }
 
 void R_DrawTriangle(mvertex_t in0, mvertex_t in1, mvertex_t in2, color_t color)
@@ -409,6 +602,14 @@ void R_DrawTriangle(mvertex_t in0, mvertex_t in1, mvertex_t in2, color_t color)
 	// vertex_t v0 = MVertexToVertex(in0);
 	// vertex_t v1 = MVertexToVertex(in1);
 	// vertex_t v2 = MVertexToVertex(in2);
+
+	// R_DrawLine(in0.pos, add3(in0.pos, mul3f(in0.normal, 0.4f)), 0xFF0000);
+	// R_DrawLine(in1.pos, add3(in1.pos, mul3f(in1.normal, 0.4f)), 0xFF0000);
+	// R_DrawLine(in2.pos, add3(in2.pos, mul3f(in2.normal, 0.4f)), 0xFF0000);
+
+	// R_DrawPoint(in0.pos, 0x00FF00);
+	// R_DrawPoint(in1.pos, 0x00FF00);
+	// R_DrawPoint(in2.pos, 0x00FF00);
 
 	// World Transform
 	in0.pos = R_RotateVector3(in0.pos, __rRotation);
@@ -427,6 +628,20 @@ void R_DrawTriangle(mvertex_t in0, mvertex_t in1, mvertex_t in2, color_t color)
 	in1.pos = add3(in1.pos, __rTranslation);
 	in2.pos = add3(in2.pos, __rTranslation);
 
+	// Camera Transform
+	vec3_t cameraTranslation = neg3(__rCamera.pos);
+	in0.pos = add3(in0.pos, cameraTranslation);
+	in1.pos = add3(in1.pos, cameraTranslation);
+	in2.pos = add3(in2.pos, cameraTranslation);
+
+	vec3_t cameraRotation = neg3(__rCamera.rotation);
+	in0.pos = R_RotateVector3(in0.pos, cameraRotation);
+	in1.pos = R_RotateVector3(in1.pos, cameraRotation);
+	in2.pos = R_RotateVector3(in2.pos, cameraRotation);
+	in0.normal = R_RotateVector3(in0.normal, cameraRotation);
+	in1.normal = R_RotateVector3(in1.normal, cameraRotation);
+	in2.normal = R_RotateVector3(in2.normal, cameraRotation);
+	
 	// Lighting
 	// Gouraud shading
 	in0.color = mul3(in0.color, R_LightVertex(in0));
@@ -440,9 +655,9 @@ void R_DrawTriangle(mvertex_t in0, mvertex_t in1, mvertex_t in2, color_t color)
 
 	switch (__rProjectionType) {
 		case R_PERSPECTIVE:
-			v0 = R_PerspectiveTransform(in0);
-			v1 = R_PerspectiveTransform(in1);
-			v2 = R_PerspectiveTransform(in2);
+			v0 = R_PerspectiveTransform__(in0);
+			v1 = R_PerspectiveTransform__(in1);
+			v2 = R_PerspectiveTransform__(in2);
 			break;
 		default:
 			v0 = MVertexToVertex(in0);
@@ -457,12 +672,12 @@ void R_DrawTriangle(mvertex_t in0, mvertex_t in1, mvertex_t in2, color_t color)
 
 	// Screen clipping
 	polygon_t poly = {.vertices={v0, v1, v2}, .count=3};
-	poly = R_ClipWithPlane(poly, PLANE_X0);
-	poly = R_ClipWithPlane(poly, PLANE_X1);
-	poly = R_ClipWithPlane(poly, PLANE_Y0);
-	poly = R_ClipWithPlane(poly, PLANE_Y1);
-	poly = R_ClipWithPlane(poly, PLANE_Z0);
-	poly = R_ClipWithPlane(poly, PLANE_Z1);
+	poly = R_ClipPolygonWithPlane(poly, PLANE_X0);
+	poly = R_ClipPolygonWithPlane(poly, PLANE_X1);
+	poly = R_ClipPolygonWithPlane(poly, PLANE_Y0);
+	poly = R_ClipPolygonWithPlane(poly, PLANE_Y1);
+	poly = R_ClipPolygonWithPlane(poly, PLANE_Z0);
+	poly = R_ClipPolygonWithPlane(poly, PLANE_Z1);
 
 	// Rasterize loop
 	for (int vi=0; vi<(poly.count-2); ++vi) {
@@ -475,10 +690,6 @@ void R_DrawTriangle(mvertex_t in0, mvertex_t in1, mvertex_t in2, color_t color)
 		} else {
 			R_RasterizeBBoxTriangle(t0, t1, t2, color);
 		}
-
-		// R_RasterizePoint(vec3(t0.pos.x, t0.pos.y, 0), 0xFFFFFF);
-		// R_RasterizePoint(vec3(t1.pos.x, t1.pos.y, 0), 0xFFFFFF);
-		// R_RasterizePoint(vec3(t2.pos.x, t2.pos.y, 0), 0xFFFFFF);
 	}
 
 	// R_RasterizeTriangle(v0, v1, v2, color);
@@ -491,12 +702,12 @@ void R_DrawLineTriangle(mvertex_t in0, mvertex_t in1, mvertex_t in2, color_t col
 	vertex_t v2 = R_TransformAndProject(in2);
 
 	polygon_t poly = {.vertices={v0, v1, v2}, .count=3};
-	poly = R_ClipWithPlane(poly, PLANE_X0);
-	poly = R_ClipWithPlane(poly, PLANE_X1);
-	poly = R_ClipWithPlane(poly, PLANE_Y0);
-	poly = R_ClipWithPlane(poly, PLANE_Y1);
-	poly = R_ClipWithPlane(poly, PLANE_Z0);
-	poly = R_ClipWithPlane(poly, PLANE_Z1);
+	poly = R_ClipPolygonWithPlane(poly, PLANE_X0);
+	poly = R_ClipPolygonWithPlane(poly, PLANE_X1);
+	poly = R_ClipPolygonWithPlane(poly, PLANE_Y0);
+	poly = R_ClipPolygonWithPlane(poly, PLANE_Y1);
+	poly = R_ClipPolygonWithPlane(poly, PLANE_Z0);
+	poly = R_ClipPolygonWithPlane(poly, PLANE_Z1);
 
 	for (int vi=0; vi<(poly.count-2); ++vi) {
 		vertex_t t0 = poly.vertices[0];
@@ -567,7 +778,8 @@ void R_DrawQuads(mvertex_t* verts, int count, color_t color)
 void R_DrawModel(model_t model, color_t color)
 {
 	for (int mi=0; mi<1; ++mi) {
-		R_Texture(NULL);///&model.meshes[mi].texture);
+		// R_Texture(NULL);
+		R_Texture(&model.meshes[mi].texture);
 		R_DrawTriangles(model.meshes[mi].vertices, model.meshes[mi].vertexCount, color);
 	}
 }
@@ -580,6 +792,8 @@ void R_DrawLineModel(model_t model, color_t color)
 }
 
 texture_t testTexture;
+model_t wallModel;
+model_t floorModel;
 
 void R_Init()
 {
@@ -746,6 +960,46 @@ void Render3DModelTestScene()
 		testTexture = R_LoadTexture("assets/metal2.bmp");
 	}
 
+	if (!wallModel.meshes) {
+		// Assume all those static models need to be generated
+		vec3_t p0 = vec3f(0);
+		vec3_t p1 = vec3(0, 0.5f, 0.3f);
+		vec3_t p2 = vec3(0, 0.8f, 1.3f);
+		vec3_t p3 = vec3(0, 0.5f, 2.3f);
+		vec3_t p4 = vec3(0, 0.0f, 2.6f);
+
+		mvertex_t vertices[] = {
+			{vec3(-0.5f, p0.y, p0.z), .texcoord=vec2(0, 0), .color=vec3f(1)},
+			{vec3(+0.5f, p0.y, p0.z), .texcoord=vec2(1, 0), .color=vec3f(1)},
+			{vec3(+0.5f, p1.y, p1.z), .texcoord=vec2(1, 1), .color=vec3f(1)},
+			{vec3(-0.5f, p1.y, p1.z), .texcoord=vec2(0, 1), .color=vec3f(1)},
+
+			{vec3(-0.5f, p1.y, p1.z), .texcoord=vec2(0, 0), .color=vec3f(1)},
+			{vec3(+0.5f, p1.y, p1.z), .texcoord=vec2(1, 0), .color=vec3f(1)},
+			{vec3(+0.5f, p2.y, p2.z), .texcoord=vec2(1, 1), .color=vec3f(1)},
+			{vec3(-0.5f, p2.y, p2.z), .texcoord=vec2(0, 1), .color=vec3f(1)},
+
+			{vec3(-0.5f, p2.y, p2.z), .texcoord=vec2(0, 0), .color=vec3f(1)},
+			{vec3(+0.5f, p2.y, p2.z), .texcoord=vec2(1, 0), .color=vec3f(1)},
+			{vec3(+0.5f, p3.y, p3.z), .texcoord=vec2(1, 1), .color=vec3f(1)},
+			{vec3(-0.5f, p3.y, p3.z), .texcoord=vec2(0, 1), .color=vec3f(1)},
+
+			{vec3(-0.5f, p3.y, p3.z), .texcoord=vec2(0, 0), .color=vec3f(1)},
+			{vec3(+0.5f, p3.y, p3.z), .texcoord=vec2(1, 0), .color=vec3f(1)},
+			{vec3(+0.5f, p4.y, p4.z), .texcoord=vec2(1, 1), .color=vec3f(1)},
+			{vec3(-0.5f, p4.y, p4.z), .texcoord=vec2(0, 1), .color=vec3f(1)},
+		};
+		wallModel = GenerateModelFromQuads(vertices, array_size(vertices)/4, "assets/metal2.bmp");
+
+		mvertex_t floorVertices[] = {
+			{vec3(-0.5f, -0.5f, 0.0f), .texcoord=vec2(0, 0), .color=vec3f(1)},
+			{vec3(+0.5f, -0.5f, 0.0f), .texcoord=vec2(1, 0), .color=vec3f(1)},
+			{vec3(+0.5f, +0.5f, 0.0f), .texcoord=vec2(1, 1), .color=vec3f(1)},
+			{vec3(-0.5f, +0.5f, 0.0f), .texcoord=vec2(0, 1), .color=vec3f(1)},
+		};
+		floorModel = GenerateModelFromQuads(floorVertices, array_size(floorVertices)/4, "assets/metal2.bmp");
+	}
+
 	R_Texture(&testTexture);
 
 	R_Clear();
@@ -773,24 +1027,79 @@ void Render3DModelTestScene()
 	// R_Projection(R_PERSPECTIVE);
 	R_PerspectiveProjection(70, 320.0f/240.0f, 0.1f, 100.0f);
 
-	R_SetTranslation(vec3(0.0f, 0.0, -1.5f - (sinf(x) * 0.5f)));
-	R_SetRotation(vec3(0, x, 0));
+	R_SetTranslation(vec3(32.0f, 3.0f + (sinf(x) * 0.5f), 0.0f));
+	R_SetRotation(vec3(0, 0, x));
 	// R_SetRotation(vec3(0, -0.5, 0));
-	R_SetScale(vec3f(0.5f));
-	R_DrawQuads(verts2, 12, 0xFFAA88);
+	R_SetScale(vec3f(1));
+	// R_DrawQuads(verts2, 12, 0xFFAA88);
 
 	// {
 	// 	R_SetTranslation(vec3(0.0f, 0.0, -0.7f));
-	// 	R_SetRotation(vec3(0, 0.0f + sinf(x)*0.2f, 0));
+		// R_SetRotation(vec3(0, 0.0f + sinf(x)*0.2f, 0));
 	// 	R_DrawQuads(verts2, 4, 0xFF8888);
 	// }
 
 	// R_DrawLineTriangles(state->cryoMesh.vertices, state->cryoMesh.vertexCount, 0xFF8888);
 	// R_DrawModel(state->testboxModel, 0xFF8888);
 	// R_DrawModel(state->cryoModel, 0xFF8888);
+	// R_DrawModel(state->corridorDefaultModel, 0xFF8888);
+
+	// R_DrawModel(wallModel, 0xFF8888);
+	// R_DrawModel(floorModel, 0xFF8888);
+	R_DrawModel(wallModel, 0xFFFFFF);
 }
 
 void RenderWorld()
 {
-	
+	state_t* state = GetState();
+	game_t* game = &state->game;
+
+	R_SetCamera(vec3(32, 2, 1.5f), vec3(0, 0, state->gameTime/2));
+	// R_SetCamera(vec3(32, 2 + sinf(state->gameTime)*1, 1.5f), vec3(0.0f, 0.2f, 0));
+
+	Render3DModelTestScene();
+
+	// R_SetTranslation(vec3(0, -0.5f, -2));
+	// R_SetTranslation(vec3(0.0f, -0.5f, -1.5f - (sinf(x) * 0.5f)));
+	// R_DrawModel(floorModel, 0xFF8888);
+
+	R_SetTranslation(vec3(32, 3, 1));
+	R_SetRotation(vec3(0, 0, 0));
+	R_SetScale(vec3f(1));
+
+	for (int wy=0; wy<LEVEL_GRID_SIZE; ++wy) {
+		for (int wx=0; wx<LEVEL_GRID_SIZE; ++wx) {
+			bool_t tile = game->level[wy*LEVEL_GRID_SIZE + wx];
+			if (tile) {
+				R_SetRotation(vec3(0, 0, 0));
+				R_SetTranslation(vec3(wx, wy, 0));
+				R_DrawModel(floorModel, 0xFF8888);
+
+				bool_t left = game->level[wy*LEVEL_GRID_SIZE + (wx-1)];
+				bool_t right = game->level[wy*LEVEL_GRID_SIZE + (wx+1)];
+				bool_t back = game->level[(wy-1)*LEVEL_GRID_SIZE + wx];
+				bool_t front = game->level[(wy+1)*LEVEL_GRID_SIZE + wx];
+				if (!left) {
+					R_SetTranslation(vec3(wx - 0.5f, wy, 0));
+					R_SetRotation(vec3(0, 0, -PI/2));
+					R_DrawModel(wallModel, 0xFF8888);
+				}
+				if (!right) {
+					R_SetTranslation(vec3(wx + 0.5f, wy, 0));
+					R_SetRotation(vec3(0, 0, PI/2));
+					R_DrawModel(wallModel, 0xFF8888);
+				}
+				if (!back) {
+					R_SetTranslation(vec3(wx, wy - 0.5f, 0));
+					R_SetRotation(vec3(0, 0, PI));
+					R_DrawModel(wallModel, 0xFF8888);
+				}
+				if (!front) {
+					R_SetTranslation(vec3(wx, wy + 0.5f, 0));
+					R_SetRotation(vec3(0, 0, 0));
+					R_DrawModel(wallModel, 0xFF8888);
+				}
+			}
+		}
+	}
 }
